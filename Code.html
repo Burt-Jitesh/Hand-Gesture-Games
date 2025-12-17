@@ -1,0 +1,813 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Gesture Controlled Platformer</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap');
+        
+        body {
+            font-family: 'Press Start 2P', cursive;
+            overflow: hidden;
+            background-color: #202020;
+            touch-action: none;
+        }
+
+        #game-container {
+            position: relative;
+            width: 100vw;
+            height: 100vh;
+            background: #5c94fc; /* Mario Sky Blue */
+            overflow: hidden;
+        }
+
+        canvas {
+            display: block;
+            width: 100%;
+            height: 100%;
+        }
+
+        #webcam-container {
+            position: absolute;
+            top: 20px;
+            right: 20px;
+            width: 240px;
+            height: 180px;
+            border: 4px solid white;
+            border-radius: 8px;
+            overflow: hidden;
+            background: black;
+            z-index: 10;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.3);
+            transform: scaleX(-1); /* Mirror the preview for natural feel */
+        }
+
+        #webcam {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+        }
+
+        #input-bar-container {
+            position: absolute;
+            bottom: 10px;
+            left: 50%;
+            transform: translateX(-50%);
+            width: 80%;
+            height: 8px;
+            background: rgba(255,255,255,0.3);
+            border-radius: 4px;
+            overflow: hidden;
+        }
+
+        #input-bar-fill {
+            width: 0%;
+            height: 100%;
+            background: #00ff00;
+            transition: width 0.1s;
+            margin: 0 auto; /* Center it */
+        }
+
+        .hud {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            color: white;
+            text-shadow: 2px 2px 0 #000;
+            z-index: 10;
+            pointer-events: none;
+        }
+
+        #loading {
+            position: absolute;
+            inset: 0;
+            background: rgba(0,0,0,0.9);
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            z-index: 50;
+            text-align: center;
+        }
+        
+        #toast {
+            position: absolute;
+            top: 80px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: rgba(0, 255, 0, 0.8);
+            color: white;
+            padding: 10px 20px;
+            border-radius: 4px;
+            font-size: 14px;
+            opacity: 0;
+            transition: opacity 0.5s;
+            pointer-events: none;
+            z-index: 30;
+        }
+
+        /* Scanline effect for video */
+        #webcam-container::after {
+            content: " ";
+            display: block;
+            position: absolute;
+            top: 0;
+            left: 0;
+            bottom: 0;
+            right: 0;
+            background: linear-gradient(rgba(18, 16, 16, 0) 50%, rgba(0, 0, 0, 0.25) 50%), linear-gradient(90deg, rgba(255, 0, 0, 0.06), rgba(0, 255, 0, 0.02), rgba(0, 0, 255, 0.06));
+            z-index: 2;
+            background-size: 100% 2px, 3px 100%;
+            pointer-events: none;
+        }
+    </style>
+</head>
+<body>
+
+    <div id="game-container">
+        <!-- HUD -->
+        <div class="hud">
+            <h1 class="text-xl md:text-2xl mb-2">GESTURE JUMPER</h1>
+            <p class="text-sm text-yellow-300">SCORE: <span id="score">0</span></p>
+            <p class="text-xs text-gray-200 mt-2">SPEED: <span id="speed-indicator">0%</span></p>
+        </div>
+
+        <!-- Notification Toast -->
+        <div id="toast">CHECKPOINT SAVED!</div>
+
+        <!-- Webcam Feed -->
+        <div id="webcam-container">
+            <video id="webcam" autoplay playsinline></video>
+            <!-- Visual Input Indicator inside Webcam box -->
+            <div id="input-bar-container">
+                <div id="input-bar-fill"></div>
+            </div>
+            <div id="gesture-feedback" class="absolute bottom-6 left-2 text-xs text-white font-bold bg-black/50 px-2 py-1 rounded transform scale-x-[-1]">
+                Waiting...
+            </div>
+        </div>
+
+        <!-- Main Game Canvas -->
+        <canvas id="gameCanvas"></canvas>
+
+        <!-- Loading Screen -->
+        <div id="loading">
+            <div class="animate-bounce text-4xl mb-4">✋</div>
+            <h2 class="text-2xl mb-4">Loading AI Vision...</h2>
+            <p class="text-sm max-w-md leading-6 text-gray-300">
+                Please allow camera access.<br>
+                <strong>Center Hand:</strong> Stop.<br>
+                <strong>Move Side:</strong> Walk/Run (Analog).<br>
+                <strong>Pinch:</strong> Jump.
+            </p>
+            <div id="loading-bar" class="w-64 h-2 bg-gray-700 mt-4 rounded overflow-hidden">
+                <div class="h-full bg-green-500 animate-pulse w-1/2"></div>
+            </div>
+        </div>
+        
+        <!-- Game Over Screen -->
+        <div id="game-over" class="hidden absolute inset-0 bg-black/80 flex flex-col items-center justify-center text-white z-40">
+            <h2 class="text-red-500 text-4xl mb-4">GAME OVER</h2>
+            <p class="mb-8">Score: <span id="final-score">0</span></p>
+            <div class="flex gap-4">
+                <button onclick="resetGame(true)" class="px-6 py-3 bg-white text-black hover:bg-gray-200 transition border-b-4 border-gray-400 active:border-0 active:translate-y-1">CONTINUE</button>
+                <button onclick="resetGame(false)" class="px-6 py-3 bg-red-600 text-white hover:bg-red-700 transition border-b-4 border-red-800 active:border-0 active:translate-y-1">NEW GAME</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- MediaPipe Scripts -->
+    <script type="module">
+        import {
+            FilesetResolver,
+            HandLandmarker
+        } from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.0";
+
+        const video = document.getElementById("webcam");
+        const loadingScreen = document.getElementById("loading");
+        const gestureFeedback = document.getElementById("gesture-feedback");
+        const speedIndicator = document.getElementById("speed-indicator");
+        const inputBarFill = document.getElementById("input-bar-fill");
+        
+        let handLandmarker = undefined;
+        let webcamRunning = false;
+        let lastVideoTime = -1;
+        
+        // Game Input State
+        const inputState = {
+            xAxis: 0, // Float from -1.0 (Left) to 1.0 (Right)
+            jump: false
+        };
+
+        // --- AI SETUP ---
+        const createHandLandmarker = async () => {
+            try {
+                const vision = await FilesetResolver.forVisionTasks(
+                    "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.0/wasm"
+                );
+                handLandmarker = await HandLandmarker.createFromOptions(vision, {
+                    baseOptions: {
+                        modelAssetPath: `https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task`,
+                        delegate: "GPU"
+                    },
+                    runningMode: "VIDEO",
+                    numHands: 1
+                });
+                loadingScreen.style.display = 'none';
+                enableCam();
+            } catch (e) {
+                console.error(e);
+                alert("Failed to load AI model. Please try refreshing.");
+            }
+        };
+
+        const enableCam = () => {
+            if (!handLandmarker) return;
+
+            const constraints = { video: true };
+
+            navigator.mediaDevices.getUserMedia(constraints).then((stream) => {
+                video.srcObject = stream;
+                video.addEventListener("loadeddata", predictWebcam);
+                webcamRunning = true;
+            }).catch(err => {
+                console.error(err);
+                alert("Camera access is required to play.");
+            });
+        };
+
+        // --- GESTURE RECOGNITION ---
+        async function predictWebcam() {
+            if (lastVideoTime !== video.currentTime) {
+                lastVideoTime = video.currentTime;
+                const startTimeMs = performance.now();
+                
+                if (handLandmarker) {
+                    const results = handLandmarker.detectForVideo(video, startTimeMs);
+                    
+                    if (results.landmarks && results.landmarks.length > 0) {
+                        const landmarks = results.landmarks[0];
+                        
+                        // 1. Analog Movement Control
+                        const wristX = landmarks[0].x;
+                        const centerX = 0.5;
+                        const deadzone = 0.05; // Small deadzone in center
+                        
+                        // Calculate raw difference from center
+                        let diff = wristX - centerX;
+                        
+                        // Apply Deadzone
+                        if (Math.abs(diff) < deadzone) {
+                            inputState.xAxis = 0;
+                        } else {
+                            // Normalize 0 to 1 after deadzone
+                            // Max range is roughly 0.5 (center to edge)
+                            // We want full speed at roughly 0.3 distance from center
+                            const sensitivity = 3.0; 
+                            
+                            // Adjust for deadzone offset
+                            if (diff > 0) diff -= deadzone;
+                            else diff += deadzone;
+
+                            // Invert direction because of mirror effect
+                            // If user moves hand Right (on screen), WristX decreases (in raw camera coords usually, but let's observe)
+                            // Actually, with scaleX(-1), visual right is camera left.
+                            // Logic: 
+                            // wristX < 0.5 (Camera Left) -> Visual Right -> Move Right
+                            // wristX > 0.5 (Camera Right) -> Visual Left -> Move Left
+                            
+                            inputState.xAxis = -diff * sensitivity;
+                            
+                            // Clamp between -1 and 1
+                            inputState.xAxis = Math.max(-1, Math.min(1, inputState.xAxis));
+                        }
+
+                        // 2. Detect Pinch (Jump)
+                        const indexTip = landmarks[8];
+                        const thumbTip = landmarks[4];
+                        const distance = Math.sqrt(
+                            Math.pow(indexTip.x - thumbTip.x, 2) +
+                            Math.pow(indexTip.y - thumbTip.y, 2)
+                        );
+                        inputState.jump = distance < 0.05;
+
+                        // UI Feedback
+                        const speedPercent = Math.round(Math.abs(inputState.xAxis) * 100);
+                        speedIndicator.innerText = speedPercent + "%";
+                        
+                        // Visual bar
+                        inputBarFill.style.width = speedPercent + "%";
+                        inputBarFill.style.backgroundColor = inputState.jump ? '#ff3333' : '#00ff00';
+                        
+                        let status = "Neutral";
+                        if (inputState.jump) status = "JUMP!";
+                        else if (inputState.xAxis > 0.1) status = "Running Right >>";
+                        else if (inputState.xAxis < -0.1) status = "<< Running Left";
+                        
+                        gestureFeedback.innerText = status;
+                        gestureFeedback.className = `absolute bottom-6 left-2 text-xs text-white font-bold px-2 py-1 rounded transform scale-x-[-1] ${inputState.jump ? 'bg-red-500' : 'bg-green-600'}`;
+
+                    } else {
+                        // Reset if no hand
+                        inputState.xAxis = 0;
+                        inputState.jump = false;
+                        gestureFeedback.innerText = "Show Hand";
+                        inputBarFill.style.width = "0%";
+                    }
+                }
+            }
+            window.requestAnimationFrame(predictWebcam);
+        }
+
+        createHandLandmarker();
+
+        // --- GAME LOGIC ---
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+        const scoreEl = document.getElementById('score');
+        const gameOverEl = document.getElementById('game-over');
+        const finalScoreEl = document.getElementById('final-score');
+        const toastEl = document.getElementById('toast');
+
+        // Physics Constants (Adjusted for DeltaTime)
+        // We use pixels per second now for smooth movement
+        const GRAVITY = 1200;
+        const MOVE_ACCEL = 1000;
+        const FRICTION = 8.0; // Damping factor
+        const MAX_SPEED = 350;
+        const JUMP_FORCE = -700;
+
+        let gameRunning = true;
+        let score = 0;
+        let cameraX = 0;
+        let lastTime = 0;
+
+        // Seeded Random for consistent levels across saves
+        let seed = 123456;
+        function seededRandom() {
+            seed = (seed * 9301 + 49297) % 233280;
+            return seed / 233280;
+        }
+
+        // Resize handling
+        function resize() {
+            canvas.width = window.innerWidth;
+            canvas.height = window.innerHeight;
+        }
+        window.addEventListener('resize', resize);
+        resize();
+
+        // Game Objects
+        const player = {
+            x: 100,
+            y: 100,
+            width: 40,
+            height: 40,
+            velX: 0,
+            velY: 0,
+            grounded: false,
+            color: '#ff3333'
+        };
+
+        let platforms = [];
+        let particles = [];
+        let checkpoints = [];
+
+        function generateLevel() {
+            platforms = [];
+            checkpoints = [];
+            seed = 123456; // Reset seed to ensure same level layout
+            
+            // Ground
+            for(let i=0; i<150; i++) {
+                // Ground segments
+                if (i % 8 !== 7) { 
+                    platforms.push({
+                        x: i * 200,
+                        y: canvas.height - 60,
+                        width: 200,
+                        height: 60,
+                        type: 'ground'
+                    });
+                }
+            }
+            
+            // Platforms & Checkpoints
+            let nextCheckpointX = 2000; // First checkpoint at 2000px
+            
+            for(let i=1; i<150; i++) {
+                // Random Platforms
+                if (seededRandom() > 0.4) {
+                    platforms.push({
+                        x: i * 300 + seededRandom() * 100,
+                        y: canvas.height - 200 - (seededRandom() * 150),
+                        width: 120 + seededRandom() * 60,
+                        height: 20,
+                        type: 'block'
+                    });
+                }
+
+                // Place Checkpoints
+                const currentX = i * 200;
+                if (currentX > nextCheckpointX) {
+                    // Find a ground spot nearby to place the checkpoint
+                    // We simply place it on the calculated ground height
+                    checkpoints.push({
+                        x: currentX,
+                        y: canvas.height - 140, // Height of pole
+                        width: 10,
+                        height: 80,
+                        active: false,
+                        id: checkpoints.length
+                    });
+                    nextCheckpointX += 2500; // Next checkpoint
+                }
+            }
+        }
+
+        function createParticles(x, y, color) {
+            for(let i=0; i<8; i++) {
+                particles.push({
+                    x: x,
+                    y: y,
+                    velX: (Math.random() - 0.5) * 300,
+                    velY: (Math.random() - 0.5) * 300,
+                    life: 0.5, // seconds
+                    color: color
+                });
+            }
+        }
+        
+        function showToast(msg) {
+            toastEl.innerText = msg;
+            toastEl.style.opacity = 1;
+            setTimeout(() => {
+                toastEl.style.opacity = 0;
+            }, 2000);
+        }
+
+        function saveGame(checkpoint) {
+            const data = {
+                x: checkpoint.x, // Respawn exactly at checkpoint
+                y: checkpoint.y,
+                score: score,
+                cameraX: cameraX
+            };
+            localStorage.setItem('gestureMarioSave', JSON.stringify(data));
+            showToast("CHECKPOINT SAVED!");
+        }
+
+        function updateGame(dt) {
+            if (!gameRunning) return;
+
+            // 1. Apply Input Acceleration
+            if (Math.abs(inputState.xAxis) > 0.05) {
+                // Accelerate in direction of input
+                player.velX += inputState.xAxis * MOVE_ACCEL * dt;
+            } else {
+                // Apply friction
+                const frictionForce = player.velX * FRICTION * dt;
+                player.velX -= frictionForce;
+                
+                // Snap to 0 if slow
+                if (Math.abs(player.velX) < 10) player.velX = 0;
+            }
+
+            // Cap Speed
+            const currentMaxSpeed = MAX_SPEED;
+            if (player.velX > currentMaxSpeed) player.velX = currentMaxSpeed;
+            if (player.velX < -currentMaxSpeed) player.velX = -currentMaxSpeed;
+
+            // 2. Jump
+            if (inputState.jump && player.grounded) {
+                player.velY = JUMP_FORCE;
+                player.grounded = false;
+                createParticles(player.x + player.width/2, player.y + player.height, '#fff');
+            }
+
+            // 3. Gravity
+            player.velY += GRAVITY * dt;
+
+            // 4. Apply Velocity
+            player.x += player.velX * dt;
+            player.y += player.velY * dt;
+
+            // 5. Floor Death
+            if (player.y > canvas.height) {
+                die();
+            }
+
+            // 6. Collision Detection
+            player.grounded = false;
+            
+            // Platforms
+            platforms.forEach(plat => {
+                if (
+                    player.x < plat.x + plat.width &&
+                    player.x + player.width > plat.x &&
+                    player.y < plat.y + plat.height &&
+                    player.y + player.height > plat.y
+                ) {
+                    const overlapX = (player.width + plat.width)/2 - Math.abs((player.x + player.width/2) - (plat.x + plat.width/2));
+                    const overlapY = (player.height + plat.height)/2 - Math.abs((player.y + player.height/2) - (plat.y + plat.height/2));
+
+                    if (overlapX > overlapY) {
+                        if (player.velY > 0 && player.y < plat.y) {
+                            player.y = plat.y - player.height;
+                            player.velY = 0;
+                            player.grounded = true;
+                        } else if (player.velY < 0 && player.y > plat.y) {
+                            player.y = plat.y + plat.height;
+                            player.velY = 0;
+                        }
+                    } else {
+                        if (player.velX > 0) {
+                            player.x = plat.x - player.width;
+                            player.velX = 0;
+                        } else if (player.velX < 0) {
+                            player.x = plat.x + plat.width;
+                            player.velX = 0;
+                        }
+                    }
+                }
+            });
+            
+            // Checkpoints
+            checkpoints.forEach(cp => {
+               if (!cp.active && 
+                   player.x < cp.x + cp.width + 20 && // Wider hit box
+                   player.x + player.width > cp.x - 20 &&
+                   player.y < cp.y + cp.height &&
+                   player.y + player.height > cp.y
+               ) {
+                   cp.active = true;
+                   saveGame(cp);
+                   // Create sparkle effect
+                   createParticles(cp.x, cp.y, '#00ff00');
+               } 
+            });
+
+            // 7. Camera Smoothing
+            let targetCamX = player.x - canvas.width / 3;
+            const camSpeed = 5.0;
+            cameraX += (targetCamX - cameraX) * (1 - Math.exp(-camSpeed * dt));
+
+            // Score
+            const currentDist = Math.floor(player.x / 100);
+            if (currentDist > score) score = currentDist;
+            scoreEl.innerText = score;
+
+            // Particles
+            particles.forEach((p, index) => {
+                p.x += p.velX * dt;
+                p.y += p.velY * dt;
+                p.life -= dt;
+                if (p.life <= 0) particles.splice(index, 1);
+            });
+        }
+
+        function drawGame() {
+            // Clear
+            ctx.fillStyle = '#5c94fc';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+            ctx.save();
+            ctx.translate(-Math.floor(cameraX), 0); 
+
+            // Platforms
+            platforms.forEach(plat => {
+                if (plat.x + plat.width < cameraX || plat.x > cameraX + canvas.width) return;
+
+                if (plat.type === 'ground') {
+                    ctx.fillStyle = '#10b981';
+                    ctx.fillRect(plat.x, plat.y, plat.width, plat.height);
+                    ctx.fillStyle = '#047857';
+                    ctx.fillRect(plat.x, plat.y + 10, plat.width, plat.height - 10);
+                } else if (plat.type === 'block') {
+                    ctx.fillStyle = '#b45309';
+                    ctx.fillRect(plat.x, plat.y, plat.width, plat.height);
+                    ctx.strokeStyle = '#78350f';
+                    ctx.lineWidth = 2;
+                    ctx.strokeRect(plat.x, plat.y, plat.width, plat.height);
+                    // Detail dots
+                    ctx.fillStyle = '#78350f';
+                    ctx.fillRect(plat.x + 5, plat.y + 5, 4, 4);
+                    ctx.fillRect(plat.x + plat.width - 9, plat.y + plat.height - 9, 4, 4);
+                }
+            });
+            
+            // Checkpoints
+            checkpoints.forEach(cp => {
+                if (cp.x + cp.width < cameraX || cp.x > cameraX + canvas.width) return;
+                
+                // Pole
+                ctx.fillStyle = '#C0C0C0'; // Silver
+                ctx.fillRect(cp.x, cp.y, cp.width, cp.height);
+                ctx.fillStyle = '#000'; // Base
+                ctx.fillRect(cp.x - 5, cp.y + cp.height - 5, 20, 5);
+                
+                // Flag
+                ctx.fillStyle = cp.active ? '#32CD32' : '#FF4500'; // Green if active, Red if not
+                ctx.beginPath();
+                ctx.moveTo(cp.x + cp.width, cp.y + 5);
+                ctx.lineTo(cp.x + cp.width + 30, cp.y + 15);
+                ctx.lineTo(cp.x + cp.width, cp.y + 25);
+                ctx.fill();
+            });
+
+            // Draw Character (Custom Function)
+            drawCharacter(ctx, player.x, player.y, player.width, player.height, inputState.xAxis);
+
+            // Particles
+            particles.forEach(p => {
+                ctx.fillStyle = p.color;
+                ctx.globalAlpha = p.life / 0.5;
+                ctx.beginPath();
+                ctx.arc(p.x, p.y, 4, 0, Math.PI * 2);
+                ctx.fill();
+            });
+            ctx.globalAlpha = 1.0;
+
+            ctx.restore();
+        }
+
+        // --- Character Drawing Function ---
+        function drawCharacter(ctx, x, y, w, h, dx) {
+            const facingRight = dx >= 0;
+            const isMoving = Math.abs(dx) > 0.1;
+            
+            // Simple bounce animation for running
+            let bounce = 0;
+            let runCycle = 0;
+            if (isMoving) {
+                runCycle = Math.sin(Date.now() / 60);
+                bounce = Math.abs(runCycle) * 3;
+            }
+
+            x = Math.floor(x);
+            y = Math.floor(y - bounce); // Bounce UP
+
+            // --- Draw Body Parts (Pixel-ish Art style for 40x40 size) ---
+
+            // 1. Shirt (Red)
+            ctx.fillStyle = '#ff0000';
+            ctx.fillRect(x + 8, y + 16, 24, 14);
+
+            // 2. Overalls (Blue)
+            ctx.fillStyle = '#2040d0'; // Rich blue
+            ctx.fillRect(x + 10, y + 24, 20, 10); // Main body
+            
+            // Straps
+            ctx.fillRect(x + 10, y + 18, 4, 6);
+            ctx.fillRect(x + 26, y + 18, 4, 6);
+
+            // Buttons (Yellow)
+            ctx.fillStyle = '#facc15';
+            ctx.fillRect(x + 11, y + 24, 2, 2);
+            ctx.fillRect(x + 27, y + 24, 2, 2);
+
+            // 3. Head (Skin Tone)
+            ctx.fillStyle = '#ffcc99';
+            ctx.fillRect(x + 6, y + 2, 28, 16); // Face shape
+
+            // 4. Hat (Red)
+            ctx.fillStyle = '#dc2626'; // Darker red for hat
+            ctx.fillRect(x + 6, y, 28, 6); // Top part
+            // Brim
+            if (facingRight) {
+                ctx.fillRect(x + 10, y + 4, 30, 4); 
+            } else {
+                ctx.fillRect(x, y + 4, 30, 4);
+            }
+
+            // 5. Face Details
+            ctx.fillStyle = 'black';
+            if (facingRight) {
+                // Eye
+                ctx.fillRect(x + 26, y + 8, 4, 6);
+                // Moustache
+                ctx.fillRect(x + 24, y + 14, 10, 3);
+                // Nose (Skin darker)
+                ctx.fillStyle = '#eba065';
+                ctx.fillRect(x + 30, y + 11, 4, 3);
+            } else {
+                // Eye
+                ctx.fillRect(x + 10, y + 8, 4, 6);
+                // Moustache
+                ctx.fillRect(x + 6, y + 14, 10, 3);
+                 // Nose
+                ctx.fillStyle = '#eba065';
+                ctx.fillRect(x + 6, y + 11, 4, 3);
+            }
+
+            // 6. Legs (Blue) - Animated
+            ctx.fillStyle = '#1e3a8a'; // Darker blue for legs
+            if (isMoving) {
+                if (runCycle > 0) {
+                    ctx.fillRect(x + 8, y + 34, 8, 6);  // Left leg back
+                    ctx.fillRect(x + 26, y + 30, 8, 6); // Right leg up
+                } else {
+                    ctx.fillRect(x + 6, y + 30, 8, 6);  // Left leg up
+                    ctx.fillRect(x + 24, y + 34, 8, 6); // Right leg back
+                }
+            } else {
+                // Standing still
+                ctx.fillRect(x + 8, y + 34, 8, 6);
+                ctx.fillRect(x + 24, y + 34, 8, 6);
+            }
+
+            // 7. Arms (Red)
+            ctx.fillStyle = '#b91c1c'; // Dark red
+            if (isMoving) {
+                // Swing arms opposite to legs
+                if (runCycle > 0) {
+                    // Right arm forward
+                    if (facingRight) ctx.fillRect(x + 20, y + 18, 14, 6);
+                    else ctx.fillRect(x + 4, y + 18, 8, 6);
+                } else {
+                    // Left arm forward
+                    if (facingRight) ctx.fillRect(x + 4, y + 18, 8, 6);
+                    else ctx.fillRect(x - 6, y + 18, 14, 6);
+                }
+            } else {
+                // Idle arms
+                ctx.fillRect(x + 4, y + 18, 6, 12); // Left
+                ctx.fillRect(x + 30, y + 18, 6, 12); // Right
+            }
+        }
+
+        // --- MAIN LOOP ---
+        function loop(timestamp) {
+            if (!lastTime) lastTime = timestamp;
+            const deltaTime = Math.min((timestamp - lastTime) / 1000, 0.1); // Cap at 0.1s to prevent huge jumps
+            lastTime = timestamp;
+
+            updateGame(deltaTime);
+            drawGame();
+            requestAnimationFrame(loop);
+        }
+
+        function die() {
+            gameRunning = false;
+            finalScoreEl.innerText = score;
+            gameOverEl.classList.remove('hidden');
+        }
+
+        window.resetGame = function(shouldLoad) {
+            player.x = 100;
+            player.y = 100;
+            player.velX = 0;
+            player.velY = 0;
+            cameraX = 0;
+            score = 0;
+            
+            // Clear save if new game requested
+            if (!shouldLoad) {
+                localStorage.removeItem('gestureMarioSave');
+            }
+
+            // Regenerate world
+            generateLevel();
+            
+            // Attempt load
+            if (shouldLoad) {
+                const save = localStorage.getItem('gestureMarioSave');
+                if (save) {
+                    try {
+                        const data = JSON.parse(save);
+                        player.x = data.x;
+                        player.y = data.y - 10; // Bump up slightly to avoid sticking in floor
+                        score = data.score;
+                        cameraX = data.cameraX;
+                        // Mark previous checkpoints as active
+                        checkpoints.forEach(cp => {
+                            if (cp.x <= player.x) cp.active = true;
+                        });
+                        showToast("GAME LOADED!");
+                    } catch(e) {
+                        console.error("Save file corrupt");
+                    }
+                }
+            }
+            
+            gameRunning = true;
+            gameOverEl.classList.add('hidden');
+            lastTime = performance.now();
+        }
+
+        // Start
+        // Check for save on initial load
+        if (localStorage.getItem('gestureMarioSave')) {
+             resetGame(true);
+        } else {
+             resetGame(false);
+        }
+        
+        requestAnimationFrame(loop);
+
+    </script>
+</body>
+</html>
