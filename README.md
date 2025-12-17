@@ -1,2 +1,2 @@
-# Hand-gesture-Mario-by-Burt
+# Hand-gesture-games
 This project is open-source and available under the MIT License.
